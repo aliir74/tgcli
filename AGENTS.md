@@ -50,4 +50,4 @@ Use the five canonical triage labels; read `docs/agents/triage-labels.md` when t
 
 ### Domain docs
 
-Use a single-context layout (`CONTEXT.md` and `docs/adr/`); read `docs/agents/domain.md` before exploring the codebase.
+Use a single-context layout (`GLOSSARY.md` and `docs/adr/`); read `docs/agents/domain.md` before exploring the codebase.

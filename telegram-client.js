@@ -281,13 +281,18 @@ const ARCHIVED_MODES = { exclude: 'exclude', include: 'keep', only: 'only' };
 // Maps tgcli's dialog options onto mtcute iterDialogs params. mtcute's own
 // default is archived: 'exclude', which silently drops every archived chat, so
 // the mode is always passed explicitly.
+// Folder 0 is "All Chats", which mtcute treats as no folder at all.
+function hasFolder(folder) {
+  return folder !== null && folder !== undefined && folder !== '' && String(folder) !== '0';
+}
+
 export function buildIterDialogsParams({ archived = 'exclude', folder = null } = {}) {
   const mode = ARCHIVED_MODES[archived];
   if (!mode) {
     throw new Error(`archived must be one of: ${Object.keys(ARCHIVED_MODES).join(', ')}`);
   }
   const params = { archived: mode };
-  if (folder !== null && folder !== undefined && folder !== '') {
+  if (hasFolder(folder)) {
     // mtcute matches a number against the folder id and a string against its title.
     params.folder = /^\d+$/.test(String(folder)) ? Number(folder) : String(folder);
   }
@@ -298,7 +303,7 @@ export function buildIterDialogsParams({ archived = 'exclude', folder = null } =
 // archive mode is re-checked against each dialog's own folder. A chat folder
 // sets its own archive rule, so nothing is dropped when one is given.
 export function matchesArchivedMode(dialog, { archived = 'exclude', folder = null } = {}) {
-  if (folder !== null && folder !== undefined && folder !== '') return true;
+  if (hasFolder(folder)) return true;
   if (archived === 'only') return dialog.isArchived;
   if (archived === 'exclude') return !dialog.isArchived;
   return true;
@@ -318,7 +323,8 @@ export function serializeDialog(dialog) {
     isGroup: typeof peer.isGroup === 'boolean' ? peer.isGroup : null,
     unreadCount: typeof dialog.unreadCount === 'number' ? dialog.unreadCount : 0,
     unreadMentionsCount: typeof dialog.unreadMentionsCount === 'number' ? dialog.unreadMentionsCount : 0,
-    isUnread: Boolean(dialog.isUnread),
+    // mtcute's isUnread needs more than one unread message; one is enough here.
+    isUnread: (dialog.unreadCount ?? 0) > 0 || Boolean(dialog.isManuallyUnread),
     isPinned: Boolean(dialog.isPinned),
     isArchived: Boolean(dialog.isArchived),
     isMuted: dialog.isMuted ?? null,

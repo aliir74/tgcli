@@ -22,7 +22,9 @@ function makeDialog(peer, extra = {}) {
     peer: { type: 'user', displayName: peer.title, ...peer },
     unreadCount: extra.unreadCount ?? 0,
     unreadMentionsCount: 0,
-    isUnread: (extra.unreadCount ?? 0) > 0,
+    // mtcute's own getter: true only above one unread message
+    isUnread: (extra.unreadCount ?? 0) > 1,
+    isManuallyUnread: extra.manual ?? false,
     isPinned: extra.isPinned ?? false,
     isArchived: extra.isArchived ?? false,
     isMuted: null,
@@ -78,6 +80,10 @@ describe('buildIterDialogsParams', () => {
     expect(buildIterDialogsParams({ folder: 'خانواده' })).toEqual({ archived: 'exclude', folder: 'خانواده' });
   });
 
+  it('treats folder 0 (All Chats) as no folder', () => {
+    expect(buildIterDialogsParams({ archived: 'only', folder: '0' })).toEqual({ archived: 'only' });
+  });
+
   it('rejects an unknown archived mode', () => {
     expect(() => buildIterDialogsParams({ archived: 'keep' })).toThrow(/archived must be one of/);
   });
@@ -93,6 +99,14 @@ describe('serializeDialog', () => {
       isPinned: false,
       lastMessageDate: '2026-10-28T23:35:00.000Z',
     });
+  });
+});
+
+describe('serializeDialog unread', () => {
+  it('marks a single unread message or a manual mark as unread', () => {
+    expect(serializeDialog(makeDialog({ id: 7, title: 'One' }, { unreadCount: 1 })).isUnread).toBe(true);
+    expect(serializeDialog(makeDialog({ id: 8, title: 'Mark' }, { manual: true })).isUnread).toBe(true);
+    expect(serializeDialog(makeDialog({ id: 9, title: 'Read' })).isUnread).toBe(false);
   });
 });
 

@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'url';
 import readline from 'readline';
 import { Command, Option } from 'commander';
 
-import { acquireStoreLock, acquireReadLock, readStoreLock } from './store-lock.js';
+import { acquireStoreLock, acquireReadLock, isPidAlive, readStoreLock } from './store-lock.js';
 import { loadConfig, normalizeConfig, saveConfig, validateConfig } from './core/config.js';
 import { createServices, createTelegramClient } from './core/services.js';
 import { withCommand, runWithTimeout, runOperation } from './core/command-context.js';
@@ -28,6 +28,7 @@ import {
   ensureServer,
   invoke,
   pingServer,
+  readControlFile,
   retryBackfill,
 } from './core/control-client.js';
 
@@ -2299,11 +2300,17 @@ async function runSyncJobsCancel(globalFlags, options = {}) {
 // checks locally and only connects when --connect is passed.
 async function runDoctor(globalFlags, options = {}) {
   const storeDir = resolveStoreDir();
-  const server = await pingServer(storeDir);
+  const pinged = await pingServer(storeDir);
+  // A server that is alive but too busy to answer the ping still owns the
+  // session, so its pid alone is enough to keep doctor off MTProto.
+  const control = pinged ? null : readControlFile(storeDir);
+  const server = pinged ?? (control?.pid && isPidAlive(control.pid) ? { ...control, unresponsive: true } : null);
   let live = null;
-  if (server) {
+  if (server?.unresponsive) {
+    live = { authenticated: false, connected: false, updatesRunning: false, error: 'control server did not answer the ping' };
+  } else if (server) {
     try {
-      live = await invoke(storeDir, { op: 'connectionStatus', args: {} });
+      live = await invoke(storeDir, { op: 'connectionStatus', args: {}, timeoutMs: globalFlags.timeoutMs });
     } catch (error) {
       live = { authenticated: false, connected: false, updatesRunning: false, error: error?.message ?? String(error) };
     }
@@ -2336,7 +2343,9 @@ async function runDoctor(globalFlags, options = {}) {
       storeDir,
       lockHeld: lock.exists,
       lockInfo: lock.info,
-      server: server ? { pid: server.pid, version: server.version, startedAt: server.startedAt } : null,
+      server: server
+        ? { pid: server.pid, version: server.version, startedAt: server.startedAt, responsive: !server.unresponsive }
+        : null,
       authenticated,
       connected,
       updatesRunning: live ? live.updatesRunning : null,
@@ -2354,7 +2363,8 @@ async function runDoctor(globalFlags, options = {}) {
     const connectedLabel = connected === null ? 'not checked (no server running; pass --connect)' : String(connected);
     console.log(`STORE: ${payload.storeDir}`);
     console.log(`LOCKED: ${payload.lockHeld}${payload.lockInfo ? ` (${payload.lockInfo})` : ''}`);
-    console.log(`SERVER: ${server ? `running (pid ${server.pid}, since ${server.startedAt})` : 'not running'}`);
+    const serverState = server?.unresponsive ? 'running but not responding' : 'running';
+    console.log(`SERVER: ${server ? `${serverState} (pid ${server.pid}, since ${server.startedAt})` : 'not running'}`);
     console.log(`AUTHENTICATED: ${payload.authenticated}`);
     console.log(`CONNECTED: ${connectedLabel}`);
     if (payload.updatesRunning !== null) {

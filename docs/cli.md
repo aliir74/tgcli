@@ -12,7 +12,7 @@ connection and open database over the loopback control API, then renders the
 result. The server is the single writer; the auto-started server shuts itself
 down once the queue drains and nothing is watched.
 
-Commands that stay local (no server): `config`, `service`, `doctor`, and `auth`
+Commands that stay local (no server): `config`, `service`, `doctor` (it asks a running server for its state but never starts one), and `auth`
 (interactive login bootstraps the session the server then uses).
 
 ## Global flags
@@ -95,9 +95,14 @@ one-shot client.
 ## doctor
 - doctor [--connect]
   - Checks auth, lock, FTS, last sync, queue state.
+  - With a control server running, asks it for the warm client's state (a live `getMe`) instead of opening a second MTProto client. Without one, `CONNECTED` reads "not checked" unless `--connect` is passed.
 
 ## channels
-- channels list [--limit] [--query]
+- channels list [--limit] [--archived exclude|include|only] [--folder <id|title>] [--query <text> [--global]]
+  - Lists your dialogs newest first, pinned first, with `unreadCount`, `isArchived`, `isPinned`, `isMuted` and `lastMessageDate`.
+  - `--archived` defaults to `exclude` (Telegram's main list). Use `include` to see unread messages in archived chats.
+  - `--folder` takes a chat folder id or title from `folders list`; the folder's own archive rule applies.
+  - `--query` matches your own dialogs (Archive included by default). `--global` searches public Telegram peers instead.
 - channels show --chat <id|username>
 - channels watch --chat <id|username>
   - Subscribe a chat for archiving: enables sync and queues a backfill job; run `tgcli backfill --once` or `tgcli backfill --follow` to process it.

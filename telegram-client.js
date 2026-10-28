@@ -276,6 +276,62 @@ function normalizePeerType(peer) {
   return 'chat';
 }
 
+const ARCHIVED_MODES = { exclude: 'exclude', include: 'keep', only: 'only' };
+
+// Maps tgcli's dialog options onto mtcute iterDialogs params. mtcute's own
+// default is archived: 'exclude', which silently drops every archived chat, so
+// the mode is always passed explicitly.
+// Folder 0 is "All Chats", which mtcute treats as no folder at all.
+function hasFolder(folder) {
+  return folder !== null && folder !== undefined && folder !== '' && String(folder) !== '0';
+}
+
+export function buildIterDialogsParams({ archived = 'exclude', folder = null } = {}) {
+  const mode = ARCHIVED_MODES[archived];
+  if (!mode) {
+    throw new Error(`archived must be one of: ${Object.keys(ARCHIVED_MODES).join(', ')}`);
+  }
+  const params = { archived: mode };
+  if (hasFolder(folder)) {
+    // mtcute matches a number against the folder id and a string against its title.
+    params.folder = /^\d+$/.test(String(folder)) ? Number(folder) : String(folder);
+  }
+  return params;
+}
+
+// Telegram returns the main list's pinned chats even for folderId 1, so the
+// archive mode is re-checked against each dialog's own folder. A chat folder
+// sets its own archive rule, so nothing is dropped when one is given.
+export function matchesArchivedMode(dialog, { archived = 'exclude', folder = null } = {}) {
+  if (hasFolder(folder)) return true;
+  if (archived === 'only') return dialog.isArchived;
+  if (archived === 'exclude') return !dialog.isArchived;
+  return true;
+}
+
+export function serializeDialog(dialog) {
+  const peer = dialog.peer;
+  if (!peer) return null;
+  const lastMessage = dialog.lastMessage;
+  return {
+    id: peer.id.toString(),
+    type: normalizePeerType(peer),
+    title: peer.displayName || 'Unknown',
+    username: 'username' in peer ? peer.username ?? null : null,
+    chatType: typeof peer.chatType === 'string' ? peer.chatType : null,
+    isForum: typeof peer.isForum === 'boolean' ? peer.isForum : null,
+    isGroup: typeof peer.isGroup === 'boolean' ? peer.isGroup : null,
+    unreadCount: typeof dialog.unreadCount === 'number' ? dialog.unreadCount : 0,
+    unreadMentionsCount: typeof dialog.unreadMentionsCount === 'number' ? dialog.unreadMentionsCount : 0,
+    // mtcute's isUnread needs more than one unread message; one is enough here.
+    isUnread: (dialog.unreadCount ?? 0) > 0 || Boolean(dialog.isManuallyUnread),
+    isPinned: Boolean(dialog.isPinned),
+    isArchived: Boolean(dialog.isArchived),
+    isMuted: dialog.isMuted ?? null,
+    lastMessageDate: lastMessage?.date instanceof Date ? lastMessage.date.toISOString() : null,
+  };
+}
+
 function isGroupPeer(peer) {
   if (!peer) return false;
   if (typeof peer.isGroup === 'boolean') {
@@ -811,32 +867,20 @@ class TelegramClient {
     return true;
   }
 
-  async listDialogs(limit = 50, retriedAfterSessionReset = false) {
+  // archived: 'exclude' (Telegram's main list, the default), 'include' (main list
+  // and Archive merged by date) or 'only' (the Archive folder). folder: a chat
+  // folder id or title; a folder carries its own archive rule, so archived is
+  // ignored when folder is set.
+  async listDialogs(limit = 50, options = {}, retriedAfterSessionReset = false) {
     try {
       await this.ensureLogin();
       const effectiveLimit = limit && limit > 0 ? limit : Infinity;
       const results = [];
 
-      for await (const dialog of this.client.iterDialogs({})) {
-        const peer = dialog.peer;
-        if (!peer) continue;
-
-        const id = peer.id.toString();
-        const username = 'username' in peer ? peer.username ?? null : null;
-        const chatType = typeof peer.chatType === 'string' ? peer.chatType : null;
-        const isForum = typeof peer.isForum === 'boolean' ? peer.isForum : null;
-        const isGroup = typeof peer.isGroup === 'boolean' ? peer.isGroup : null;
-        results.push({
-          id,
-          type: normalizePeerType(peer),
-          title: peer.displayName || 'Unknown',
-          username,
-          chatType,
-          isForum,
-          isGroup,
-          unreadCount: typeof dialog.unreadCount === 'number' ? dialog.unreadCount : 0,
-          unreadMentionsCount: typeof dialog.unreadMentionsCount === 'number' ? dialog.unreadMentionsCount : 0,
-        });
+      for await (const dialog of this.client.iterDialogs(buildIterDialogsParams(options))) {
+        const serialized = serializeDialog(dialog);
+        if (!serialized || !matchesArchivedMode(serialized, options)) continue;
+        results.push(serialized);
 
         if (results.length >= effectiveLimit) {
           break;
@@ -852,7 +896,7 @@ class TelegramClient {
         if (!loginSuccess) {
           throw new Error('Failed to restore session after dialog fetch reset.');
         }
-        return this.listDialogs(limit, true);
+        return this.listDialogs(limit, options, true);
       }
       throw error;
     }
@@ -891,41 +935,30 @@ class TelegramClient {
     return results;
   }
 
-  async searchDialogs(keyword, limit = 100, { local = false } = {}) {
+  // Matches the query against your own dialogs (main list and Archive by default).
+  // global: true searches public Telegram peers instead (contacts.search), which
+  // returns chats you are not in and carries no unread counts.
+  async searchDialogs(keyword, limit = 100, { global = false, archived = 'include', folder = null } = {}) {
     const query = sanitizeString(keyword).trim().toLowerCase();
     if (!query) {
       return [];
     }
 
-    if (!local) {
+    if (global) {
       return this.searchPeers(query, limit);
     }
 
     await this.ensureLogin();
     const results = [];
 
-    for await (const dialog of this.client.iterDialogs({})) {
-      const peer = dialog.peer;
-      if (!peer) continue;
+    for await (const dialog of this.client.iterDialogs(buildIterDialogsParams({ archived, folder }))) {
+      const serialized = serializeDialog(dialog);
+      if (!serialized || !matchesArchivedMode(serialized, { archived, folder })) continue;
 
-      const title = (peer.displayName || '').toLowerCase();
-      const username = ('username' in peer && peer.username ? peer.username : '').toLowerCase();
-
+      const title = (serialized.title || '').toLowerCase();
+      const username = (serialized.username || '').toLowerCase();
       if (title.includes(query) || username.includes(query)) {
-        const chatType = typeof peer.chatType === 'string' ? peer.chatType : null;
-        const isForum = typeof peer.isForum === 'boolean' ? peer.isForum : null;
-        const isGroup = typeof peer.isGroup === 'boolean' ? peer.isGroup : null;
-        results.push({
-          id: peer.id.toString(),
-          type: normalizePeerType(peer),
-          title: peer.displayName || 'Unknown',
-          username: 'username' in peer ? peer.username ?? null : null,
-          chatType,
-          isForum,
-          isGroup,
-          unreadCount: typeof dialog.unreadCount === 'number' ? dialog.unreadCount : 0,
-          unreadMentionsCount: typeof dialog.unreadMentionsCount === 'number' ? dialog.unreadMentionsCount : 0,
-        });
+        results.push(serialized);
       }
 
       if (results.length >= limit) {

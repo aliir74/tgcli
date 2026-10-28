@@ -200,8 +200,19 @@ function closeSessionRecord(record, context) {
   return null;
 }
 
+const archivedSchema = z
+  .enum(["exclude", "include", "only"])
+  .optional()
+  .describe("Archived chats: exclude (Telegram's main list), include, or only the Archive");
+const folderSchema = z
+  .union([z.number().int().nonnegative(), z.string().min(1)])
+  .optional()
+  .describe("Chat folder id or title");
+
 const listChannelsSchema = {
   limit: z.number().int().positive().optional().describe("Maximum number of channels to return (default: 50)"),
+  archived: archivedSchema,
+  folder: folderSchema,
 };
 
 const searchChannelsSchema = {
@@ -210,6 +221,8 @@ const searchChannelsSchema = {
     .min(1)
     .describe("Keywords to search for in channel titles or usernames"),
   limit: z.number().int().positive().optional().describe("Maximum number of results to return (default: 100)"),
+  archived: archivedSchema,
+  folder: folderSchema,
 };
 
 const setChannelTagsSchema = {
@@ -651,9 +664,9 @@ function createServerInstance() {
     "listChannels",
     "Lists available Telegram dialogs for the authenticated account, including unread message counts.",
     listChannelsSchema,
-    async ({ limit }) => {
+    async ({ limit, archived, folder }) => {
       await ensureTelegramConnected();
-      const dialogs = await OPERATIONS.listChannels(warmServices, { limit });
+      const dialogs = await OPERATIONS.listChannels(warmServices, { limit, archived, folder });
 
       return {
         content: [
@@ -668,11 +681,11 @@ function createServerInstance() {
 
   server.tool(
     "searchChannels",
-    "Searches dialogs by title or username.",
+    "Searches your own dialogs (Archive included by default) by title or username.",
     searchChannelsSchema,
-    async ({ keywords, limit }) => {
+    async ({ keywords, limit, archived, folder }) => {
       await ensureTelegramConnected();
-      const matches = await OPERATIONS.listChannels(warmServices, { query: keywords, limit: limit ?? 100 });
+      const matches = await OPERATIONS.listChannels(warmServices, { query: keywords, limit: limit ?? 100, archived, folder });
 
       return {
         content: [

@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'url';
 import readline from 'readline';
 import { Command, Option } from 'commander';
 
-import { acquireStoreLock, acquireReadLock, readStoreLock } from './store-lock.js';
+import { acquireStoreLock, acquireReadLock, isPidAlive, readStoreLock } from './store-lock.js';
 import { loadConfig, normalizeConfig, saveConfig, validateConfig } from './core/config.js';
 import { createServices, createTelegramClient } from './core/services.js';
 import { withCommand, runWithTimeout, runOperation } from './core/command-context.js';
@@ -26,7 +26,9 @@ import {
   cancelBackfill,
   enqueueBackfill,
   ensureServer,
+  invoke,
   pingServer,
+  readControlFile,
   retryBackfill,
 } from './core/control-client.js';
 
@@ -236,8 +238,11 @@ function buildProgram() {
   const channels = program.command('channels').description('Channel discovery and settings');
   channels
     .command('list')
-    .description('List channels')
-    .option('--query <text>', 'Search by title or username')
+    .description('List your dialogs, newest first, with unread counts')
+    .option('--query <text>', 'Search your dialogs by title or username')
+    .option('--global', 'With --query, search public Telegram peers instead of your dialogs')
+    .option('--archived <mode>', 'Archived chats: exclude (main list, default), include, only')
+    .option('--folder <id|title>', 'Only dialogs in this chat folder (see `folders list`)')
     .option('--limit <n>', 'Limit results')
     .action(withGlobalOptions((globalFlags, options) => runChannelsList(globalFlags, options)));
   channels
@@ -2289,19 +2294,46 @@ async function runSyncJobsCancel(globalFlags, options = {}) {
   }, globalFlags.timeoutMs);
 }
 
+// With a control server running, the server owns the session: doctor asks it for
+// the warm client's state instead of opening a second MTProto client on the same
+// session (which can reset or log out the server's). Without a server, doctor
+// checks locally and only connects when --connect is passed.
 async function runDoctor(globalFlags, options = {}) {
-  return withCommand(globalFlags, { need: 'full', lock: null }, async ({ storeDir, telegramClient, messageSyncService }) => {
-    const lock = readStoreLock(storeDir);
-    let authenticated = false;
-    let connected = false;
+  const storeDir = resolveStoreDir();
+  const pinged = await pingServer(storeDir);
+  // A server that is alive but too busy to answer the ping still owns the
+  // session, so its pid alone is enough to keep doctor off MTProto.
+  const control = pinged ? null : readControlFile(storeDir);
+  const server = pinged ?? (control?.pid && isPidAlive(control.pid) ? { ...control, unresponsive: true } : null);
+  let live = null;
+  if (server?.unresponsive) {
+    live = { authenticated: false, connected: false, updatesRunning: false, error: 'control server did not answer the ping' };
+  } else if (server) {
     try {
-      authenticated = await telegramClient.isAuthorized();
-      if (options.connect && authenticated) {
-        await telegramClient.startUpdates();
-        connected = true;
-      }
+      live = await invoke(storeDir, { op: 'connectionStatus', args: {}, timeoutMs: globalFlags.timeoutMs });
     } catch (error) {
-      authenticated = false;
+      live = { authenticated: false, connected: false, updatesRunning: false, error: error?.message ?? String(error) };
+    }
+  }
+
+  const need = server ? 'archive' : 'full';
+  return withCommand(globalFlags, { need, lock: null }, async ({ telegramClient, messageSyncService }) => {
+    const lock = readStoreLock(storeDir);
+    let authenticated = live ? live.authenticated : false;
+    // null = not checked (no server and no --connect), never reported as "down".
+    let connected = live ? live.connected : null;
+    let error = live?.error ?? null;
+    if (!live) {
+      try {
+        authenticated = await telegramClient.isAuthorized();
+        if (options.connect && authenticated) {
+          await telegramClient.startUpdates();
+          connected = true;
+        }
+      } catch (err) {
+        authenticated = false;
+        error = err?.message ?? String(err);
+      }
     }
 
     const search = messageSyncService.getSearchStatus();
@@ -2311,8 +2343,13 @@ async function runDoctor(globalFlags, options = {}) {
       storeDir,
       lockHeld: lock.exists,
       lockInfo: lock.info,
+      server: server
+        ? { pid: server.pid, version: server.version, startedAt: server.startedAt, responsive: !server.unresponsive }
+        : null,
       authenticated,
       connected,
+      updatesRunning: live ? live.updatesRunning : null,
+      error,
       ftsEnabled: search.enabled,
       ftsVersion: search.version,
       queue,
@@ -2323,10 +2360,19 @@ async function runDoctor(globalFlags, options = {}) {
       return;
     }
 
+    const connectedLabel = connected === null ? 'not checked (no server running; pass --connect)' : String(connected);
     console.log(`STORE: ${payload.storeDir}`);
     console.log(`LOCKED: ${payload.lockHeld}${payload.lockInfo ? ` (${payload.lockInfo})` : ''}`);
+    const serverState = server?.unresponsive ? 'running but not responding' : 'running';
+    console.log(`SERVER: ${server ? `${serverState} (pid ${server.pid}, since ${server.startedAt})` : 'not running'}`);
     console.log(`AUTHENTICATED: ${payload.authenticated}`);
-    console.log(`CONNECTED: ${payload.connected}`);
+    console.log(`CONNECTED: ${connectedLabel}`);
+    if (payload.updatesRunning !== null) {
+      console.log(`UPDATES: ${payload.updatesRunning ? 'running' : 'stopped'}`);
+    }
+    if (error) {
+      console.log(`ERROR: ${error}`);
+    }
     console.log(`FTS: ${payload.ftsEnabled}${payload.ftsVersion ? ` (v${payload.ftsVersion})` : ''}`);
     console.log(`QUEUE: pending=${queue.pending} in_progress=${queue.in_progress} idle=${queue.idle} error=${queue.error}`);
   });
@@ -2334,9 +2380,22 @@ async function runDoctor(globalFlags, options = {}) {
 
 async function runChannelsList(globalFlags, options = {}) {
   const limit = parsePositiveInt(options.limit, '--limit') ?? 50;
+  const archived = options.archived ?? (options.query ? 'include' : 'exclude');
+  if (!['exclude', 'include', 'only'].includes(archived)) {
+    throw new Error('--archived must be one of: exclude, include, only');
+  }
+  if (options.global && !options.query) {
+    throw new Error('--global requires --query');
+  }
   const dialogs = await runOperation(globalFlags, {
     op: 'listChannels',
-    args: { query: options.query, limit },
+    args: {
+      query: options.query,
+      limit,
+      archived,
+      folder: options.folder ?? null,
+      global: Boolean(options.global),
+    },
   });
 
   if (globalFlags.json) {
@@ -2344,7 +2403,9 @@ async function runChannelsList(globalFlags, options = {}) {
   } else {
     for (const dialog of dialogs) {
       const label = dialog.title || dialog.username || dialog.id;
-      console.log(`${label} (${dialog.id})`);
+      const unread = dialog.unreadCount ? ` [${dialog.unreadCount} unread]` : '';
+      const archivedTag = dialog.isArchived ? ' [archived]' : '';
+      console.log(`${label} (${dialog.id})${unread}${archivedTag}`);
     }
   }
 }

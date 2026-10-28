@@ -224,13 +224,40 @@ async function resolveLiveMetadata(ctx, channelId, fallback = {}) {
 
 // --- channels ---
 
-// args: { query?, limit? }. With a query, search dialogs; otherwise list them.
+// args: { query?, limit?, archived?, folder?, global? }. With a query, search
+// dialogs (archived included unless set); otherwise list them (archived
+// excluded unless set, matching Telegram's main list).
 async function listChannels(ctx, args = {}) {
   const limit = args.limit ?? 50;
+  const folder = args.folder ?? null;
   if (args.query) {
-    return ctx.telegramClient.searchDialogs(args.query, limit);
+    return ctx.telegramClient.searchDialogs(args.query, limit, {
+      global: Boolean(args.global),
+      archived: args.archived ?? 'include',
+      folder,
+    });
   }
-  return ctx.telegramClient.listDialogs(limit);
+  return ctx.telegramClient.listDialogs(limit, { archived: args.archived ?? 'exclude', folder });
+}
+
+// A live round-trip (getMe) on the client that serves operations. Run through
+// the control server it reports the warm client's real state, which is the one
+// `doctor` must describe, without opening a second MTProto client.
+async function connectionStatus(ctx) {
+  const client = ctx.telegramClient;
+  let authenticated = false;
+  let error = null;
+  try {
+    authenticated = await client.isAuthorized();
+  } catch (err) {
+    error = err?.message ?? String(err);
+  }
+  return {
+    authenticated,
+    connected: authenticated,
+    updatesRunning: Boolean(client.updatesRunning),
+    error,
+  };
 }
 
 // args: { chat }. Returns the archive channel record, or a live-metadata-derived
@@ -892,6 +919,7 @@ function buildPassthroughOps(table) {
 }
 
 export const OPERATIONS = {
+  connectionStatus,
   listChannels,
   channelShow,
   channelSetSync,

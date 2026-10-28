@@ -263,7 +263,7 @@ describe('POST /control/invoke', () => {
     });
     expect(status).toBe(200);
     expect(spy).toHaveBeenCalledWith(warmServices, { limit: 10 });
-    expect(warmServices.telegramClient.listDialogs).toHaveBeenCalledWith(10);
+    expect(warmServices.telegramClient.listDialogs).toHaveBeenCalledWith(10, { archived: 'exclude', folder: null });
     expect(json).toEqual({ result: [{ id: '1', title: 'Warm' }] });
     expect(ensureLogin).toHaveBeenCalledTimes(1);
   });

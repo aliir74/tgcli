@@ -125,6 +125,6 @@ describe('control server reachable before Telegram connect resolves', () => {
     const { status, json } = await opPromise;
     expect(status).toBe(200);
     expect(json).toEqual({ result: [{ id: '1', title: 'Warm' }] });
-    expect(warmServices.telegramClient.listDialogs).toHaveBeenCalledWith(1);
+    expect(warmServices.telegramClient.listDialogs).toHaveBeenCalledWith(1, { archived: 'exclude', folder: null });
   });
 });

@@ -75,14 +75,27 @@ describe('OPERATIONS registry', () => {
 
   it('listChannels lists dialogs and applies the default limit', async () => {
     const result = await OPERATIONS.listChannels(ctx(), {});
-    expect(hooks.telegramClient.listDialogs).toHaveBeenCalledWith(50);
+    expect(hooks.telegramClient.listDialogs).toHaveBeenCalledWith(50, { archived: 'exclude', folder: null });
     expect(result).toEqual([{ id: '1', title: 'Warm' }]);
   });
 
   it('listChannels searches when a query is given', async () => {
     const result = await OPERATIONS.listChannels(ctx(), { query: 'foo', limit: 7 });
-    expect(hooks.telegramClient.searchDialogs).toHaveBeenCalledWith('foo', 7);
+    expect(hooks.telegramClient.searchDialogs).toHaveBeenCalledWith('foo', 7, { global: false, archived: 'include', folder: null });
     expect(result).toEqual([{ id: '2', title: 'WarmSearch' }]);
+  });
+
+  it('connectionStatus reports a live getMe round-trip on the serving client', async () => {
+    hooks.telegramClient.updatesRunning = true;
+    const result = await OPERATIONS.connectionStatus(ctx(), {});
+    expect(hooks.telegramClient.isAuthorized).toHaveBeenCalled();
+    expect(result).toEqual({ authenticated: true, connected: true, updatesRunning: true, error: null });
+  });
+
+  it('connectionStatus reports a failed round-trip as disconnected with the error', async () => {
+    hooks.telegramClient.isAuthorized = vi.fn().mockRejectedValue(new Error('Session is reset'));
+    const result = await OPERATIONS.connectionStatus(ctx(), {});
+    expect(result).toMatchObject({ authenticated: false, connected: false, error: 'Session is reset' });
   });
 
   it('getGroupInviteLink returns the link descriptor', async () => {

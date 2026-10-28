@@ -128,6 +128,11 @@ describe('telegram auth recovery', () => {
         isGroup: false,
         unreadCount: 0,
         unreadMentionsCount: 0,
+        isUnread: false,
+        isPinned: false,
+        isArchived: false,
+        isMuted: null,
+        lastMessageDate: null,
       },
     ]);
   });

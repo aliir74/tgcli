@@ -880,6 +880,9 @@ class TelegramClient {
       for await (const dialog of this.client.iterDialogs(buildIterDialogsParams(options))) {
         const serialized = serializeDialog(dialog);
         if (!serialized || !matchesArchivedMode(serialized, options)) continue;
+        // unreadOnly scans every dialog: the limit counts only unread matches,
+        // so busy channels cannot push an unread DM past the cut.
+        if (options.unreadOnly && !serialized.isUnread && !serialized.unreadMentionsCount) continue;
         results.push(serialized);
 
         if (results.length >= effectiveLimit) {

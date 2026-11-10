@@ -210,7 +210,8 @@ const folderSchema = z
   .describe("Chat folder id or title");
 
 const listChannelsSchema = {
-  limit: z.number().int().positive().optional().describe("Maximum number of channels to return (default: 50)"),
+  limit: z.number().int().positive().optional().describe("Maximum number of channels to return (default: 50; no default with unread)"),
+  unread: z.boolean().optional().describe("Only unread dialogs or ones with unread mentions; scans every dialog"),
   archived: archivedSchema,
   folder: folderSchema,
 };

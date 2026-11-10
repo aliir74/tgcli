@@ -142,6 +142,16 @@ describe('listDialogs', () => {
     await tc.listDialogs(10, { folder: 'خصوصی' });
     expect(calls[0]).toEqual({ archived: 'exclude', folder: 'خصوصی' });
   });
+
+  it('with unreadOnly, counts only unread chats toward the limit', async () => {
+    // 60 busy read chats sit ahead of the unread DM, as on Ali's account.
+    const busy = Array.from({ length: 60 }, (_, i) => makeDialog({ id: 1000 + i, title: `Read ${i}` }));
+    const dm = makeDialog({ id: 116739434, title: 'Hossein Irani' }, { unreadCount: 6 });
+    const { tc } = makeTc([...busy, dm]);
+    expect((await tc.listDialogs(50)).map((d) => d.id)).not.toContain('116739434');
+    const result = await tc.listDialogs(0, { unreadOnly: true });
+    expect(result.map((d) => d.id)).toEqual(['116739434']);
+  });
 });
 
 describe('searchDialogs', () => {

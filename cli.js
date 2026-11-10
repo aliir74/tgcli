@@ -243,7 +243,8 @@ function buildProgram() {
     .option('--global', 'With --query, search public Telegram peers instead of your dialogs')
     .option('--archived <mode>', 'Archived chats: exclude (main list, default), include, only')
     .option('--folder <id|title>', 'Only dialogs in this chat folder (see `folders list`)')
-    .option('--limit <n>', 'Limit results')
+    .option('--unread', 'Only unread dialogs (or with unread mentions); scans all dialogs, no default limit')
+    .option('--limit <n>', 'Limit results (default 50; none with --unread)')
     .action(withGlobalOptions((globalFlags, options) => runChannelsList(globalFlags, options)));
   channels
     .command('show')
@@ -2379,8 +2380,8 @@ async function runDoctor(globalFlags, options = {}) {
 }
 
 async function runChannelsList(globalFlags, options = {}) {
-  const limit = parsePositiveInt(options.limit, '--limit') ?? 50;
-  const archived = options.archived ?? (options.query ? 'include' : 'exclude');
+  const limit = parsePositiveInt(options.limit, '--limit') ?? (options.unread ? undefined : 50);
+  const archived = options.archived ?? (options.query || options.unread ? 'include' : 'exclude');
   if (!['exclude', 'include', 'only'].includes(archived)) {
     throw new Error('--archived must be one of: exclude, include, only');
   }
@@ -2395,6 +2396,7 @@ async function runChannelsList(globalFlags, options = {}) {
       archived,
       folder: options.folder ?? null,
       global: Boolean(options.global),
+      unread: Boolean(options.unread),
     },
   });
 

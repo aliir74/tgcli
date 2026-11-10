@@ -224,7 +224,8 @@ async function resolveLiveMetadata(ctx, channelId, fallback = {}) {
 
 // --- channels ---
 
-// args: { query?, limit?, archived?, folder?, global? }. With a query, search
+// args: { query?, limit?, archived?, folder?, global?, unread? }. unread scans
+// every dialog and returns only unread ones (no default limit). With a query, search
 // dialogs (archived included unless set); otherwise list them (archived
 // excluded unless set, matching Telegram's main list).
 async function listChannels(ctx, args = {}) {
@@ -237,7 +238,9 @@ async function listChannels(ctx, args = {}) {
       folder,
     });
   }
-  return ctx.telegramClient.listDialogs(limit, { archived: args.archived ?? 'exclude', folder });
+  const options = { archived: args.archived ?? 'exclude', folder };
+  if (args.unread) return ctx.telegramClient.listDialogs(args.limit ?? 0, { ...options, unreadOnly: true });
+  return ctx.telegramClient.listDialogs(limit, options);
 }
 
 // A live round-trip (getMe) on the client that serves operations. Run through
